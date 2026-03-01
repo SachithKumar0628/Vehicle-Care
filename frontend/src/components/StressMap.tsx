@@ -16,16 +16,23 @@ interface StressMapProps {
     vehicleId: string;
 }
 
-// A generic route in a city (Chennai/Bengaluru vibe)
+// A realistic route simulating actual roads in Bangalore (MG Road / Cubbon Park area)
 const BASE_ROUTE: [number, number][] = [
-    [12.9716, 77.5946], // Bangalore center
-    [12.9750, 77.5980],
-    [12.9800, 77.6000],
-    [12.9850, 77.6050],
-    [12.9900, 77.6100],
-    [12.9850, 77.6150],
-    [12.9800, 77.6200],
-    [12.9700, 77.6300],
+    [12.9738, 77.6119], // Trinity Metro
+    [12.9734, 77.6083], // MG Road start
+    [12.9731, 77.6046], // MG Road mid
+    [12.9727, 77.6006], // MG Road Metro
+    [12.9724, 77.5960], // Anil Kumble Circle
+    [12.9750, 77.5954], // Queen's Road turn
+    [12.9780, 77.5948], // Cantonment approach
+    [12.9810, 77.5942],
+    [12.9825, 77.5954], // Mount Carmel turn
+    [12.9840, 77.5975], // High Grounds
+    [12.9830, 77.6015], // Golf Course Road
+    [12.9815, 77.6050], // Chalukya Circle
+    [12.9790, 77.6075], // Race Course approach
+    [12.9765, 77.6095], // St Marks Road
+    // loops back to start roughly
 ];
 
 interface PathSegment {
