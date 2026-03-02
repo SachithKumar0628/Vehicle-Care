@@ -4,7 +4,9 @@ import { useParams, useNavigate } from 'react-router-dom';
 import HealthRing from '../components/HealthRing';
 import TrendChart from '../components/TrendChart';
 import { getTier } from '../intelligence/scoring';
-import { ArrowLeft, Gauge, Activity, Wrench, Zap, AlertTriangle, TrendingDown, Settings, Battery, Disc, CircuitBoard, Wind, Cog, Car, Play } from 'lucide-react';
+import { calculateTripCost } from '../intelligence/tripCosting';
+import StressMap from '../components/StressMap';
+import { ArrowLeft, Gauge, Activity, Wrench, Zap, AlertTriangle, TrendingDown, Settings, Battery, Disc, CircuitBoard, Wind, Cog, Car, Play, Calendar, IndianRupee, Download, Map } from 'lucide-react';
 
 const SUBSYSTEM_ICONS: Record<string, React.ReactNode> = {
     engine: <Settings size={18} color="#f97316" />,
@@ -23,7 +25,7 @@ const SUBSYSTEM_LABELS: Record<string, string> = {
 
 export default function VehicleDetailPage() {
     const { id } = useParams<{ id: string }>();
-    const { fleet, sendCommand, evaluating, startEvaluation } = useFleet();
+    const { fleet, sendCommand, evaluating, startEvaluation, tickCount } = useFleet();
     const navigate = useNavigate();
     const [activeTab, setActiveTab] = useState('general');
 
@@ -50,7 +52,7 @@ export default function VehicleDetailPage() {
     const anomalies = vehicle.anomalies || [];
     const rul = vehicle.rulEstimates || [];
     const recommendations = vehicle.recommendations || [];
-    const tabs = ['General', 'Health', 'Charts', 'Insights'];
+    const tabs = ['General', 'Health', 'Charts', 'Insights', 'Map'];
 
     const getColor = (s: number) => {
         if (s >= 85) return '#22c55e';
@@ -58,6 +60,40 @@ export default function VehicleDetailPage() {
         if (s >= 50) return '#F5A623';
         if (s >= 25) return '#f97316';
         return '#ef4444';
+    };
+
+    // Calculate Trip Cost
+    const distanceKm = state.speed ? (state.speed * (tickCount * 2) / 3600) : 0;
+    const energyConsumed = info.fuel_type === 'Electric'
+        ? ((100 - (state.battery_soc || 100)) * 0.6) // Assume 60kWh battery
+        : ((100 - (state.fuel_level || 100)) * 0.5); // Assume 50L tank
+
+    // Calculate wear drops (starting from 100% optimal and degrading)
+    const brakeWearPercent = 100 - (state.pad_wear || 100);
+    const oilWearPercent = 100 - (state.oil_life || 100);
+    const isAggressive = state.speed > 100 || (state.rpm > 4000);
+
+    const tripCost = calculateTripCost(distanceKm, energyConsumed, brakeWearPercent, oilWearPercent, 0.01, isAggressive);
+
+    // Feature 5: Service Handshake / Black Box JSON Export
+    const downloadJobCard = () => {
+        const jobCard = {
+            timestamp: new Date().toISOString(),
+            vehicle: info,
+            health_summary: scoring,
+            active_alerts: alerts,
+            anomalies: anomalies,
+            rul_estimates: rul,
+            ai_recommendations: recommendations,
+            black_box_snapshot: state // the frozen snapshot of current parameters
+        };
+        const blob = new Blob([JSON.stringify(jobCard, null, 2)], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `JobCard_${info.plate}_${new Date().getTime()}.json`;
+        a.click();
+        URL.revokeObjectURL(url);
     };
 
     const paramsBySubsystem: Record<string, string[]> = {};
@@ -81,6 +117,11 @@ export default function VehicleDetailPage() {
                         <span className={`badge ${overallScore >= 70 ? 'badge-success' : overallScore >= 50 ? 'badge-warning' : 'badge-danger'}`} style={{ fontSize: 10 }}>
                             {scoring?.tier || 'Loading...'}
                         </span>
+                        {overallScore < 60 && (
+                            <button onClick={downloadJobCard} style={{ display: 'flex', alignItems: 'center', gap: 4, background: '#ef4444', color: '#fff', border: 'none', padding: '2px 8px', borderRadius: 6, fontSize: 10, fontWeight: 700, cursor: 'pointer', animation: 'pulse 2s infinite' }}>
+                                <Download size={10} /> BOOK SERVICE
+                            </button>
+                        )}
                     </div>
                 </div>
                 <div style={{ fontSize: 28, fontWeight: 800, color: getColor(overallScore) }}>{overallScore}%</div>
@@ -181,6 +222,16 @@ export default function VehicleDetailPage() {
                                     const value = state[pName] ?? 0;
                                     const score = paramScores[pName] ?? 50;
                                     const color = getColor(score);
+
+                                    // Feature 3: Digital Twin Fleet Benchmarking
+                                    const otherVehicles = fleet.filter(v => v.id !== id && v.scoring?.paramScores && v.scoring.paramScores[pName] !== undefined);
+                                    let fleetAvgScore = score;
+                                    let hasFleetData = false;
+                                    if (otherVehicles.length > 0) {
+                                        fleetAvgScore = otherVehicles.reduce((acc, v) => acc + (v.scoring?.paramScores[pName] || 0), 0) / otherVehicles.length;
+                                        hasFleetData = true;
+                                    }
+
                                     return (
                                         <div key={pName} className={`card ${score < 25 ? 'critical-glow' : ''}`} style={{ position: 'relative', padding: '14px 12px' }}>
                                             <div style={{ position: 'absolute', top: 8, right: 8 }}>
@@ -193,8 +244,22 @@ export default function VehicleDetailPage() {
                                             <p style={{ fontSize: 10, color: '#94a3b8', marginTop: 2 }}>
                                                 Optimal: {cfg.optMin}–{cfg.optMax} {cfg.unit}
                                             </p>
-                                            <div className="status-bar">
+                                            <div className="status-bar" style={{ position: 'relative' }}>
                                                 <div className="status-bar-fill" style={{ width: `${Math.max(5, score)}%`, background: color }} />
+                                                {/* Fleet Benchmarking "Ghost" Marker */}
+                                                {hasFleetData && (
+                                                    <div title={`Fleet Average Score: ${Math.round(fleetAvgScore)}%`} style={{
+                                                        position: 'absolute',
+                                                        left: `${Math.max(5, fleetAvgScore)}%`,
+                                                        top: -2,
+                                                        bottom: -2,
+                                                        width: 3,
+                                                        background: '#64748b',
+                                                        borderRadius: 2,
+                                                        border: '1px solid #fff',
+                                                        boxShadow: '0 0 2px rgba(0,0,0,0.3)'
+                                                    }} />
+                                                )}
                                             </div>
                                         </div>
                                     );
@@ -308,6 +373,67 @@ export default function VehicleDetailPage() {
                         </div>
                     </div>
 
+                    {/* Predictive Maintenance & Trip Costing (Phase 5) */}
+                    <div className="responsive-grid-2" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
+
+                        {/* 1. Predictive Maintenance Window */}
+                        <div className="card">
+                            <h3 style={{ fontSize: 13, fontWeight: 700, marginBottom: 12, display: 'flex', alignItems: 'center', gap: 6, color: '#1e293b' }}>
+                                <Calendar size={16} color="#8b5cf6" /> Maintenance Window
+                            </h3>
+                            {rul.filter(r => r.status === 'degrading' || r.status === 'critical').length > 0 ? (
+                                rul.filter(r => r.status === 'degrading' || r.status === 'critical').slice(0, 2).map((r, i) => {
+                                    const failureDate = new Date();
+                                    failureDate.setDate(failureDate.getDate() + (r.daysToFailure > 0 ? r.daysToFailure : 0));
+                                    return (
+                                        <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, paddingBottom: 8, borderBottom: i === 0 ? '1px dashed #e2e8f0' : 'none' }}>
+                                            <div>
+                                                <p style={{ fontSize: 12, fontWeight: 700 }}>{SUBSYSTEM_LABELS[r.subsystem] || r.subsystem}</p>
+                                                <p style={{ fontSize: 10, color: '#ef4444', fontWeight: 600 }}>Fails around {failureDate.toLocaleDateString()}</p>
+                                            </div>
+                                            <div style={{ background: '#f3f4f6', padding: '6px 10px', borderRadius: 8, textAlign: 'center' }}>
+                                                <p style={{ fontSize: 16, fontWeight: 800, color: '#1e293b' }}>{Math.ceil(r.daysToFailure)}</p>
+                                                <p style={{ fontSize: 9, color: '#64748b', textTransform: 'uppercase' }}>Days left</p>
+                                            </div>
+                                        </div>
+                                    )
+                                })
+                            ) : (
+                                <div style={{ textAlign: 'center', padding: '10px 0' }}>
+                                    <p style={{ fontSize: 12, color: '#22c55e', fontWeight: 600 }}>All systems optimal.</p>
+                                    <p style={{ fontSize: 10, color: '#64748b', marginTop: 4 }}>No imminent service dates.</p>
+                                </div>
+                            )}
+                        </div>
+
+                        {/* 4. Intelligent Trip Costing */}
+                        <div className="card">
+                            <h3 style={{ fontSize: 13, fontWeight: 700, marginBottom: 12, display: 'flex', alignItems: 'center', gap: 6, color: '#1e293b' }}>
+                                <IndianRupee size={16} color="#10b981" /> This Trip's Cost
+                            </h3>
+                            <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8, marginBottom: 8 }}>
+                                <span style={{ fontSize: 28, fontWeight: 800, color: '#10b981', lineHeight: 1 }}>₹{tripCost.totalCost.toFixed(2)}</span>
+                                <span style={{ fontSize: 11, color: '#64748b', marginBottom: 4 }}>/ {distanceKm.toFixed(1)} km</span>
+                            </div>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: '#475569' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                                    <span>Energy Burn:</span>
+                                    <span style={{ fontWeight: 600 }}>₹{tripCost.fuelCost.toFixed(2)}</span>
+                                </div>
+                                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                                    <span>Micro-wear (Brakes, Oil):</span>
+                                    <span style={{ fontWeight: 600 }}>₹{tripCost.wearCost.toFixed(2)}</span>
+                                </div>
+                                {tripCost.savingsPotential > 0 && (
+                                    <div style={{ marginTop: 6, padding: '6px 8px', background: '#dcfce7', borderRadius: 6, color: '#166534', fontWeight: 600, fontSize: 10 }}>
+                                        Slow down to save ~₹{tripCost.savingsPotential.toFixed(2)} / hr
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+
+                    </div>
+
                     {/* AI Recommendations */}
                     <div className="card">
                         <h3 style={{ fontSize: 14, fontWeight: 700, marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -336,6 +462,23 @@ export default function VehicleDetailPage() {
                                 </div>
                             ))
                         )}
+                    </div>
+                </div>
+            )}
+
+            {/* MAP TAB (Geofencing) */}
+            {activeTab === 'map' && (
+                <div style={{ animation: 'fadeIn 0.3s ease-out' }}>
+                    <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+                        <div style={{ padding: 16, borderBottom: '1px solid #e2e8f0' }}>
+                            <h3 style={{ fontSize: 14, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}>
+                                <Map size={16} color="#3478F6" /> Dynamic Stress Mapping
+                            </h3>
+                            <p style={{ fontSize: 11, color: '#64748b', marginTop: 4 }}>
+                                Route traced dynamically. Red paths indicate severe stress/anomalies over the geofence.
+                            </p>
+                        </div>
+                        <StressMap vehicleId={id || ''} />
                     </div>
                 </div>
             )}
